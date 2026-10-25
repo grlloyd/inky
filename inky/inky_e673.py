@@ -62,6 +62,7 @@ EL673_TCON = 0x60
 EL673_TRES = 0x61
 EL673_REV = 0x70
 EL673_VDCS = 0x82
+EL673_PTLW = 0x83
 EL673_PWS = 0xE3
 
 _SPI_CHUNK_SIZE = 4096
@@ -252,13 +253,23 @@ class Inky:
                 warnings.warn(f"Busy Wait: Timed out after {timeout:0.2f}s", stacklevel=2)
                 return
 
-    def _update(self, buf):
+    def _update(self, buf, window=None):
         """Update display.
 
         Dispatches display update to correct driver.
 
+        :param window: optional (x0, y0, x1, y1) inclusive panel window for a partial refresh,
+                       in which case buf holds only the window's pixels
+
         """
         self.setup()
+
+        if window is not None:
+            # The controller's partial window commands aren't publicly documented. This sequence
+            # (0x83 window, then 0x50 0xFF before refresh) follows ESPHome's Spectra E6 driver:
+            # https://github.com/esphome/esphome/pull/20944
+            x0, y0, x1, y1 = window
+            self._send_command(EL673_PTLW, [x0 >> 8, x0 & 0xFF, x1 >> 8, x1 & 0xFF, y0 >> 8, y0 & 0xFF, y1 >> 8, y1 & 0xFF, 0x01])
 
         self._send_command(EL673_DTM1, buf)
         self._send_command(EL673_PON)
@@ -266,6 +277,10 @@ class Inky:
 
         # second setting of the BTST2 register
         self._send_command(EL673_BTST2, [0x6F, 0x1F, 0x17, 0x49])
+
+        if window is not None:
+            # Float the border so only the window is driven
+            self._send_command(EL673_CDI, [0xFF])
 
         self._send_command(EL673_DRF, [0x00])
         self._busy_wait(32.0)
@@ -286,14 +301,8 @@ class Inky:
         """
         self.buf[y][x] = v & 0x07
 
-    def show(self, busy_wait=True):
-        """Show buffer on display.
-
-        :param busy_wait: If True, wait for display update to finish before returning.
-
-        """
-        region = self.buf
-
+    def _to_panel(self, region):
+        """Apply flips and rotation to map a buffer-shaped array onto the panel."""
         if self.v_flip:
             region = numpy.fliplr(region)
 
@@ -303,11 +312,43 @@ class Inky:
         if self.rotation:
             region = numpy.rot90(region, self.rotation // 90)
 
-        buf = region.flatten()
+        return region
+
+    def show(self, busy_wait=True, region=None):
+        """Show buffer on display.
+
+        :param busy_wait: If True, wait for display update to finish before returning.
+        :param region: optional (x, y, width, height) to refresh only that part of the display.
+                       The window is widened to a multiple of 4 pixels horizontally.
+                       Pixels outside it are left untouched, but may fade or ghost over time,
+                       so do a full show() now and then.
+
+        """
+        panel = self._to_panel(self.buf)
+        window = None
+
+        if region is not None:
+            x, y, w, h = region
+            if w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > self.width or y + h > self.height:
+                raise ValueError(f"Region {region} is outside the {self.width}x{self.height} display!")
+
+            # Push the region through the same flips/rotation to find it on the panel
+            mask = numpy.zeros(self.buf.shape, dtype=bool)
+            mask[y:y + h, x:x + w] = True
+            rows, cols = numpy.nonzero(self._to_panel(mask))
+
+            x0 = cols.min() & ~3
+            x1 = min((cols.max() + 4) & ~3, panel.shape[1]) - 1
+            y0, y1 = rows.min(), rows.max()
+
+            panel = panel[y0:y1 + 1, x0:x1 + 1]
+            window = (int(x0), int(y0), int(x1), int(y1))
+
+        buf = panel.flatten()
 
         buf = ((buf[::2] << 4) & 0xF0) | (buf[1::2] & 0x0F)
 
-        self._update(buf.astype("uint8").tolist())
+        self._update(buf.astype("uint8").tolist(), window=window)
 
     def set_border(self, colour):
         """Set the border colour."""

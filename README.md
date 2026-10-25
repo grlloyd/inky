@@ -158,6 +158,14 @@ Once you've prepared and set your image, and chosen a border colour, you can upd
 display.show()
 ```
 
+On the Inky Impression 7.3" Spectra 6 (E673) you can refresh just part of the display, leaving the rest of the screen untouched:
+
+```python
+display.show(region=(x, y, width, height))
+```
+
+This only works on the 7.3" Spectra 6 driver; other boards will raise an error. A partial refresh takes as long as a full one, but the rest of the screen doesn't flash. The region is widened to a multiple of 4 pixels horizontally. Pixels outside the region can fade or ghost over time, so do a full `show()` now and then. See `examples/spectra6/partial.py` and `examples/spectra6/clock.py`.
+
 ## Migrating
 
 If you're migrating code from the old `inkyphat` library you'll find that much of the drawing and image manipulation functions have been removed from Inky. These functions were always supplied by PIL, and the recommended approach is to use PIL to create and prepare your image before setting it to Inky with `set_image()`.

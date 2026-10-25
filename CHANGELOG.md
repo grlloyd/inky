@@ -1,3 +1,9 @@
+Unreleased
+----------
+
+* New: Partial-window refresh, show(region=(x, y, w, h)), for the Spectra 6 7.3" (E673)
+* New: Spectra 6 partial refresh and 7-segment clock examples
+
 2.6.0
 -----
 
